@@ -10,6 +10,52 @@ bin/rails db:prepare
 bin/rails server
 ```
 
+## Як працює вхід через JWT
+
+1. **Реєстрація:** `POST /register` приймає ім’я, email і пароль. Rails перевіряє дані, зберігає bcrypt-хеш пароля та одразу повертає JWT. Відкритий пароль не зберігається.
+2. **Вхід:** `POST /login` приймає email і пароль. `User.authenticate_by` перевіряє їх через bcrypt. Неправильні дані повертають `401`.
+3. **Видача токена:** після успішного входу сервер повертає `user`, `token` і `expires_at`. JWT містить `user_id` та `exp`, підписаний алгоритмом HS256 і діє 24 години. JWT підписаний, а не зашифрований: пароля в ньому немає.
+4. **Доступ до todos:** клієнт передає `Authorization: Bearer <token>`. Сервер перевіряє підпис, строк дії та наявність користувача, після чого встановлює `current_user`.
+5. **Власні завдання:** `current_user.todos` повертає лише завдання цього користувача. Створення автоматично призначає власника; доступ до чужого завдання повертає `404`.
+6. **Вихід:** клієнт видаляє токен. Серверного `/logout` немає; копія токена залишається чинною до завершення строку дії. Після завершення 24 годин потрібно ввійти знову.
+
+### Схема входу та запиту завдань
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Клієнт
+    participant API as Rails API
+    participant DB as База даних
+
+    Client->>API: POST /login — email, password
+    API->>DB: Знайти користувача за email
+    DB-->>API: Користувач і password_digest
+    Note over API: Перевірити пароль через bcrypt
+    alt Неправильний email або пароль
+        API-->>Client: 401 — Invalid email or password
+    else Успішний вхід
+        Note over API: Підписати JWT — user_id, exp (24 години)
+        API-->>Client: 200 — user, token, expires_at
+    end
+
+    Client->>API: GET /todos + Authorization: Bearer JWT
+    Note over API: Перевірити підпис HS256 і строк дії
+    alt Токен відсутній, недійсний або протермінований
+        API-->>Client: 401 — Authentication required
+    else Токен чинний
+        API->>DB: Знайти користувача за user_id із JWT
+        DB-->>API: Користувач або відсутній запис
+        alt Користувача немає
+            API-->>Client: 401 — Authentication required
+        else Користувач існує
+            API->>DB: current_user.todos
+            DB-->>API: Лише завдання цього користувача
+            API-->>Client: 200 — список todos у JSON
+        end
+    end
+```
+
 ## Authentication
 
 Register with a name, email and password (at least 8 characters):
